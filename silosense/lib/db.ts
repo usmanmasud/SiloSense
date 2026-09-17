@@ -66,6 +66,18 @@ CREATE TABLE IF NOT EXISTS components (
   UNIQUE(repository_id, path)
 );
 
+CREATE TABLE IF NOT EXISTS commit_events (
+  id TEXT PRIMARY KEY,
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  component_id TEXT NOT NULL REFERENCES components(id) ON DELETE CASCADE,
+  author_name TEXT NOT NULL,
+  author_email TEXT NOT NULL,
+  commit_hash TEXT NOT NULL,
+  commit_date TEXT NOT NULL,
+  additions INTEGER NOT NULL,
+  deletions INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS analysis_runs (
   id TEXT PRIMARY KEY,
   repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
@@ -139,6 +151,8 @@ CREATE TABLE IF NOT EXISTS ml_predictions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_components_repo ON components(repository_id);
+CREATE INDEX IF NOT EXISTS idx_events_component ON commit_events(component_id);
+CREATE INDEX IF NOT EXISTS idx_events_repo ON commit_events(repository_id);
 CREATE INDEX IF NOT EXISTS idx_runs_repo ON analysis_runs(repository_id);
 CREATE INDEX IF NOT EXISTS idx_features_component ON component_features(component_id);
 CREATE INDEX IF NOT EXISTS idx_scores_component ON risk_scores(component_id);

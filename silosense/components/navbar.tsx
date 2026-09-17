@@ -9,7 +9,7 @@ const links = [
   { href: "/features", label: "Features" },
   { href: "/how-it-works", label: "How It Works" },
   { href: "/methodology", label: "Methodology" },
-  { href: "/dashboard", label: "Dashboard" },
+  { href: "/dashboard", label: "Preview" },
   { href: "/about", label: "About" },
 ];
 
@@ -38,18 +38,18 @@ export function Navbar() {
           ))}
         </nav>
 
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="hidden items-center gap-4 md:flex">
           <Link
-            href="/contact"
+            href="/app/login"
             className="text-sm font-medium text-muted-foreground transition-colors hover:text-brand-primary"
           >
-            Contact
+            Log in
           </Link>
           <Link
-            href="/dashboard"
-            className="rounded-full bg-brand-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-primary-dark"
+            href="/app/register"
+            className="rounded-full bg-brand-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-accent-dark"
           >
-            View Dashboard
+            Get started
           </Link>
         </div>
 
@@ -98,13 +98,20 @@ export function Navbar() {
                 </Link>
               </li>
             ))}
-            <li>
+            <li className="flex gap-3 pt-2">
               <Link
-                href="/dashboard"
+                href="/app/login"
                 onClick={() => setOpen(false)}
-                className="inline-block rounded-full bg-brand-primary px-4 py-2 text-sm font-medium text-white"
+                className="rounded-full border border-border px-4 py-2 text-sm font-medium text-foreground"
               >
-                View Dashboard
+                Log in
+              </Link>
+              <Link
+                href="/app/register"
+                onClick={() => setOpen(false)}
+                className="rounded-full bg-brand-accent px-4 py-2 text-sm font-medium text-white"
+              >
+                Get started
               </Link>
             </li>
           </ul>

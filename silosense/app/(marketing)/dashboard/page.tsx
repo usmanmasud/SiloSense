@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -231,10 +232,23 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <p className="mt-4 text-xs text-muted-foreground">
-          This is a static visual preview built for demonstration purposes;
-          values shown are illustrative, not live data.
-        </p>
+        <div className="mt-6 flex flex-col items-start justify-between gap-4 rounded-xl border border-border bg-muted p-5 sm:flex-row sm:items-center">
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              This page is a static visual preview.
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Create a free account to analyse a real public GitHub
+              repository and see live scores.
+            </p>
+          </div>
+          <Link
+            href="/app/register"
+            className="shrink-0 rounded-full bg-brand-accent px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-accent-dark"
+          >
+            Analyze a real repo
+          </Link>
+        </div>
       </section>
     </div>
   );

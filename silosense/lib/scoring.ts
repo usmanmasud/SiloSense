@@ -19,6 +19,17 @@ export const ALERT_THRESHOLD = 70;
 
 export type ComplexityInput = { sizeBytes: number; churnTotal: number };
 
+/** Min-max normalises a set of raw numbers to [0, 1]. Ties/empty input map to 0.5. */
+export function minMaxNormalize(raw: number[]): number[] {
+  if (raw.length === 0) return [];
+  const min = Math.min(...raw);
+  const max = Math.max(...raw);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max - min < 1e-9) {
+    return raw.map(() => 0.5);
+  }
+  return raw.map((r) => (r - min) / (max - min));
+}
+
 /**
  * Complexity is only meaningful relative to the rest of the repository, so
  * it's min-max normalised across every component in the same analysis run
@@ -28,12 +39,7 @@ export function normalizeComplexity(inputs: ComplexityInput[]): number[] {
   const raw = inputs.map(
     (i) => Math.log(1 + i.sizeBytes) + Math.log(1 + i.churnTotal)
   );
-  const min = Math.min(...raw);
-  const max = Math.max(...raw);
-  if (!Number.isFinite(min) || !Number.isFinite(max) || max - min < 1e-9) {
-    return raw.map(() => 0.5);
-  }
-  return raw.map((r) => (r - min) / (max - min));
+  return minMaxNormalize(raw);
 }
 
 export type ScoreExplanation = {

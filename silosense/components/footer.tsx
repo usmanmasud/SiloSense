@@ -8,7 +8,7 @@ const columns = [
       { href: "/features", label: "Features" },
       { href: "/how-it-works", label: "How It Works" },
       { href: "/methodology", label: "Methodology" },
-      { href: "/dashboard", label: "Dashboard" },
+      { href: "/dashboard", label: "Preview" },
     ],
   },
   {
@@ -16,6 +16,13 @@ const columns = [
     links: [
       { href: "/about", label: "About" },
       { href: "/contact", label: "Contact" },
+    ],
+  },
+  {
+    title: "Account",
+    links: [
+      { href: "/app/login", label: "Log in" },
+      { href: "/app/register", label: "Get started" },
     ],
   },
 ];
@@ -34,7 +41,7 @@ export function Footer() {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-10 sm:gap-16">
+          <div className="grid grid-cols-3 gap-8 sm:gap-16">
             {columns.map((col) => (
               <div key={col.title}>
                 <h3 className="text-sm font-semibold text-foreground">
