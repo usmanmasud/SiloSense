@@ -6,6 +6,22 @@ import type { Plan } from "./plans";
 const SESSION_COOKIE = "silosense_session";
 const SESSION_DAYS = 30;
 
+const ADMIN_EMAILS = (process.env.SILOSENSE_ADMIN_EMAILS ?? "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+/**
+ * Whether an email is configured as an admin via SILOSENSE_ADMIN_EMAILS.
+ * Re-checked on every login (see the login route) rather than only at
+ * registration, so promoting or demoting an admin is just an env var edit
+ * plus a re-login - no direct database access ever required to bootstrap
+ * or recover admin access.
+ */
+export function isAdminEmail(email: string): boolean {
+  return ADMIN_EMAILS.includes(email.toLowerCase());
+}
+
 export function hashPassword(password: string): string {
   const salt = randomBytes(16);
   const hash = scryptSync(password, salt, 64);

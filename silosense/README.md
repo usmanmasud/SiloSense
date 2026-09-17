@@ -43,7 +43,11 @@ nothing to migrate by hand.
 
 To make your account an admin (unlocks `/app/admin`), set
 `SILOSENSE_ADMIN_EMAILS=you@example.com` (comma-separated for more than
-one) before registering that account.
+one) and log in (or register, if the account doesn't exist yet) — admin
+status is synced from that list on every login, not just at signup, so
+promoting or demoting an admin is always just an env var edit plus a
+re-login, never a direct database edit, regardless of which order you set
+the env var and create the account in.
 
 ## How an analysis works
 
@@ -198,8 +202,9 @@ service, **not** to a serverless/edge platform.
    - `RESEND_FROM_EMAIL` — optional, defaults to Resend's shared
      `onboarding@resend.dev` sender, which works without verifying a
      domain but is best swapped for your own once you have one.
-   - `SILOSENSE_ADMIN_EMAILS` — comma-separated emails that should become
-     admins on registration.
+   - `SILOSENSE_ADMIN_EMAILS` — comma-separated emails that should be
+     admins; applied on every login, so set this whenever you want (before
+     or after that account signs up) and log in to take effect.
 3. Deploy. The schema is created automatically against the managed
    Postgres database on first request — nothing else to run.
 4. Optional tuning via environment variables, all have sane defaults:

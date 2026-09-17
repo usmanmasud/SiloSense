@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne, newId } from "@/lib/db";
-import { hashPassword, createSession, setSessionCookie } from "@/lib/auth";
+import { hashPassword, createSession, setSessionCookie, isAdminEmail } from "@/lib/auth";
 import { registerSchema } from "@/lib/validation";
 import { rateLimit, getClientIp, tooManyRequestsResponse } from "@/lib/rate-limit";
-
-const ADMIN_EMAILS = (process.env.SILOSENSE_ADMIN_EMAILS ?? "")
-  .split(",")
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
 
 export async function POST(req: NextRequest) {
   const ip = getClientIp(req);
@@ -35,7 +30,7 @@ export async function POST(req: NextRequest) {
   }
 
   const userId = newId("user");
-  const isAdmin = ADMIN_EMAILS.includes(email);
+  const isAdmin = isAdminEmail(email);
   await query(
     `INSERT INTO users (id, email, name, password_hash, is_admin) VALUES ($1, $2, $3, $4, $5)`,
     [userId, email, name, hashPassword(password), isAdmin]
