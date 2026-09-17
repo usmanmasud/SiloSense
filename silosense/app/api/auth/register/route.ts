@@ -2,8 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, newId } from "@/lib/db";
 import { hashPassword, createSession, setSessionCookie } from "@/lib/auth";
 import { registerSchema } from "@/lib/validation";
+import { rateLimit, getClientIp, tooManyRequestsResponse } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
+  const ip = getClientIp(req);
+  if (!rateLimit(`register:${ip}`, 8, 60 * 60_000).allowed) {
+    return tooManyRequestsResponse(300);
+  }
+
   const body = await req.json().catch(() => null);
   const parsed = registerSchema.safeParse(body);
   if (!parsed.success) {

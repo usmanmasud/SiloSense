@@ -81,3 +81,41 @@ export async function destroyCurrentSession() {
   }
   await clearSessionCookie();
 }
+
+const RESET_TOKEN_MINUTES = 30;
+
+/** Always succeeds silently for unknown emails - callers must not reveal whether an account exists. */
+export function createPasswordResetToken(userId: string): string {
+  const token = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + RESET_TOKEN_MINUTES * 60 * 1000);
+  db.prepare(
+    `INSERT INTO password_resets (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`
+  ).run(newId("reset"), userId, hashToken(token), expiresAt.toISOString());
+  return token;
+}
+
+export function consumePasswordResetToken(token: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT id, user_id, expires_at, used FROM password_resets WHERE token_hash = ?`
+    )
+    .get(hashToken(token)) as
+    | { id: string; user_id: string; expires_at: string; used: number }
+    | undefined;
+
+  if (!row || row.used) return null;
+  if (new Date(row.expires_at).getTime() < Date.now()) return null;
+
+  db.prepare(`UPDATE password_resets SET used = 1 WHERE id = ?`).run(row.id);
+  return row.user_id;
+}
+
+export function setUserPassword(userId: string, password: string) {
+  db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(
+    hashPassword(password),
+    userId
+  );
+  // Force re-login everywhere - a reset likely means the old credentials
+  // (and any session created with them) shouldn't be trusted any more.
+  db.prepare(`DELETE FROM sessions WHERE user_id = ?`).run(userId);
+}

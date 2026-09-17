@@ -14,7 +14,12 @@ export default function LoginPage() {
       <div className="mt-6">
         <LoginForm />
       </div>
-      <p className="mt-6 text-center text-sm text-muted-foreground">
+      <p className="mt-3 text-center text-sm">
+        <Link href="/app/forgot-password" className="font-medium text-brand-primary">
+          Forgot your password?
+        </Link>
+      </p>
+      <p className="mt-3 text-center text-sm text-muted-foreground">
         Don&apos;t have an account?{" "}
         <Link href="/app/register" className="font-medium text-brand-primary">
           Sign up

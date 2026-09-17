@@ -2,7 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
 
-const dataDir = path.join(process.cwd(), "data");
+// SILOSENSE_DATA_DIR should point at a persistent volume in production
+// (e.g. Render's disk mount path) - without it, every redeploy on a host
+// with an ephemeral filesystem wipes the database.
+const dataDir = process.env.SILOSENSE_DATA_DIR
+  ? path.resolve(process.env.SILOSENSE_DATA_DIR)
+  : path.join(process.cwd(), "data");
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 const dbPath = path.join(dataDir, "silosense.db");
@@ -40,6 +45,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash TEXT UNIQUE NOT NULL,
   expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS password_resets (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT UNIQUE NOT NULL,
+  expires_at TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -166,6 +180,23 @@ CREATE INDEX IF NOT EXISTS idx_recommendations_component ON recommendations(comp
 `;
 
 db.exec(schema);
+
+// A run still marked "running" long after it should have finished belongs
+// to a previous process that crashed or was redeployed mid-analysis - it
+// can never complete itself, so surface it as failed rather than leaving
+// it stuck forever. The time bound (comfortably longer than the mining
+// timeouts in lib/git-mining.ts) is what makes this safe to run on every
+// module load rather than relying on a fragile "only once per process"
+// guard - Next.js's dev server can re-evaluate this module more than once
+// per process, and a naive unconditional sweep would otherwise be able to
+// race with, and clobber, a run that's still genuinely in progress.
+db.prepare(
+  `UPDATE analysis_runs
+   SET status = 'failed',
+       error = 'Interrupted by a server restart. Click "Re-analyze" to try again.',
+       completed_at = datetime('now')
+   WHERE status = 'running' AND started_at < datetime('now', '-15 minutes')`
+).run();
 
 export function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;

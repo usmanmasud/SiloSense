@@ -12,9 +12,10 @@ runs inside the same Node process as the web app.
 
 ## Requirements
 
-- **Node.js 22.5+** (24 recommended) — the app uses the built-in
+- **Node.js 24+** — the app uses the built-in
   [`node:sqlite`](https://nodejs.org/api/sqlite.html) module, so there is no
-  native dependency to compile and nothing else to install.
+  native dependency to compile and nothing else to install. (Pinned via
+  `.node-version` and `package.json#engines`.)
 - **`git`** available on the `PATH` — used directly to clone and mine
   repositories.
 
@@ -65,6 +66,35 @@ All of this is re-derived from data already persisted in SQLite
 retraining never needs to re-clone unless you explicitly click
 "Re-analyze".
 
+## Production hardening
+
+These exist specifically because this app is meant to take real signups
+from strangers, not just run as a local demo:
+
+- **Analysis queue** — `lib/analysis.ts` runs at most
+  `SILOSENSE_MAX_CONCURRENT_ANALYSES` (default 2) analyses at once across
+  *all* users; extra requests queue as `pending` runs and start as slots
+  free up, so a burst of signups can't all `git clone` and score at the
+  same time on one process.
+- **Crash/restart recovery** — on startup, any run stuck in `running`
+  (from a previous process that died mid-analysis) is marked `failed` with
+  an explanatory message instead of hanging forever, and any `pending` runs
+  left in the queue are resumed.
+- **Rate limiting** — `lib/rate-limit.ts` is an in-memory limiter (fine for
+  a single instance; would need a shared store like Redis if this were ever
+  scaled to multiple instances) applied to login (by IP and by email,
+  brute-force protection), registration, password-reset requests, and
+  triggering an analysis.
+- **Per-user repository cap** — `SILOSENSE_MAX_REPOS_PER_USER` (default 15)
+  stops one account from queuing unlimited analyses.
+- **Password reset** — `lib/email.ts` sends via the
+  [Resend](https://resend.com) HTTP API. Without `RESEND_API_KEY` set, it
+  logs the reset link to the server console instead of emailing it, so the
+  flow is testable locally with no account needed. The reset endpoint
+  always returns the same response whether or not the email is registered,
+  so it can't be used to enumerate accounts; consuming a reset token
+  signs the account out everywhere.
+
 ## Known limitations
 
 - No pull-request/code-review data is mined — only commit history. Review
@@ -77,10 +107,36 @@ retraining never needs to re-clone unless you explicitly click
 - Large repositories are capped (see above) — this is a deliberate scope
   limit, not an accident, so a demo/marketing deployment stays responsive.
 
-## Deploying
+## Deploying to Render
 
-The app needs a persistent filesystem (for the SQLite file and for
-temporary clone directories) and a long-lived Node process (analysis runs
-in the background after its API call returns) — so it should be deployed
-as a regular Node server (e.g. `next build && next start` on a VM,
-Railway, Render, Fly.io, etc.), **not** to a serverless/edge platform.
+The app needs a persistent filesystem (for the SQLite file — temp clone
+directories don't need to persist) and a long-lived Node process (analysis
+runs in the background after its API call returns), so it's deployed as a
+regular always-on web service, **not** to a serverless/edge platform.
+
+1. Push this repo to GitHub, then in Render: **New > Blueprint**, point it
+   at the repo. Render will read [`render.yaml`](../render.yaml) at the
+   repo root, which already sets the build/start commands, the working
+   directory (`silosense/`), and a 1 GB persistent disk mounted at
+   `/var/data`.
+2. **The disk requires a paid instance type** — `render.yaml` requests the
+   `starter` plan. Render's free web services don't support persistent
+   disks *and* spin down when idle (which would kill an in-progress
+   analysis), so free tier isn't viable for real usage here.
+3. In the service's **Environment** tab, set:
+   - `RESEND_API_KEY` — from a free [Resend](https://resend.com) account,
+     needed for password-reset emails to actually send. Until this is set,
+     reset links are only logged to Render's server logs, not emailed —
+     fine for your own testing, not for real users who forget a password.
+   - `RESEND_FROM_EMAIL` — optional, defaults to Resend's shared
+     `onboarding@resend.dev` sender, which works without verifying a
+     domain but is best swapped for your own once you have one.
+4. Deploy. First boot creates the SQLite schema automatically on the
+   mounted disk — nothing else to run.
+5. Optional tuning via environment variables, all have sane defaults:
+   `SILOSENSE_MAX_COMMITS`, `SILOSENSE_MAX_CONCURRENT_ANALYSES`,
+   `SILOSENSE_MAX_REPOS_PER_USER`, `SILOSENSE_CLONE_TIMEOUT_MS`.
+
+Because rate limiting and the analysis queue are in-memory, keep this to a
+**single Render instance** (no horizontal autoscaling) unless that's
+rebuilt on a shared store first.

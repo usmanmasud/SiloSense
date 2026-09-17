@@ -10,12 +10,50 @@ import { generateRecommendations } from "./recommendations";
 
 const MAX_COMPONENTS = 500;
 
+// Each analysis does a git clone plus a CPU-bound scoring pass on a single
+// Node process shared by every user, so concurrent analyses are queued
+// rather than all started at once. Runs beyond this limit simply wait as
+// 'pending' rows and are picked up as a slot frees.
+const MAX_CONCURRENT_ANALYSES = Number(
+  process.env.SILOSENSE_MAX_CONCURRENT_ANALYSES ?? 2
+);
+let runningCount = 0;
+
 /**
- * Creates a pending analysis run and kicks off mining in the background
- * without blocking the caller. The Next.js server is a long-lived Node
- * process (not a serverless function), so this in-process fire-and-forget
- * job runs to completion as long as the server stays up; callers poll the
- * run's status via the repository API route.
+ * Pulls the oldest queued run and executes it, as long as there's a free
+ * concurrency slot, then repeats until either the queue is empty or all
+ * slots are busy. Safe to call redundantly (e.g. once per new run, once at
+ * process startup) - node:sqlite's calls are synchronous, so the
+ * SELECT-then-mark-running sequence below can't race with itself.
+ */
+function pumpQueue(): void {
+  while (runningCount < MAX_CONCURRENT_ANALYSES) {
+    const next = db
+      .prepare(
+        `SELECT id FROM analysis_runs WHERE status = 'pending' ORDER BY started_at ASC LIMIT 1`
+      )
+      .get() as { id: string } | undefined;
+    if (!next) return;
+
+    runningCount++;
+    void runAnalysis(next.id)
+      .catch((err) => {
+        db.prepare(
+          `UPDATE analysis_runs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?`
+        ).run(err instanceof Error ? err.message : "Unknown error", next.id);
+      })
+      .finally(() => {
+        runningCount--;
+        pumpQueue();
+      });
+  }
+}
+
+/**
+ * Creates a pending analysis run and adds it to the in-process queue. The
+ * Next.js server is a long-lived Node process (not a serverless function),
+ * so queued jobs run to completion as long as the server stays up; callers
+ * poll the run's status via the repository API route.
  */
 export function startAnalysisRun(repositoryId: string): string {
   const runId = newId("run");
@@ -23,13 +61,18 @@ export function startAnalysisRun(repositoryId: string): string {
     `INSERT INTO analysis_runs (id, repository_id, status) VALUES (?, ?, 'pending')`
   ).run(runId, repositoryId);
 
-  void runAnalysis(runId).catch((err) => {
-    db.prepare(
-      `UPDATE analysis_runs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?`
-    ).run(err instanceof Error ? err.message : "Unknown error", runId);
-  });
-
+  pumpQueue();
   return runId;
+}
+
+declare global {
+  var __silosenseQueueResumed: boolean | undefined;
+}
+if (!globalThis.__silosenseQueueResumed) {
+  globalThis.__silosenseQueueResumed = true;
+  // Runs that were still 'pending' (never actually started mining) survive
+  // a restart safely, so pick them back up once at process startup.
+  pumpQueue();
 }
 
 export async function runAnalysis(runId: string): Promise<void> {
