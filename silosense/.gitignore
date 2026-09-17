@@ -36,6 +36,11 @@ yarn-error.log*
 # vercel
 .vercel
 
+# app data
+/data/*.db
+/data/*.db-*
+/.silosense-tmp/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
