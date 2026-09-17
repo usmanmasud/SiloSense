@@ -234,9 +234,9 @@ export async function runAnalysis(runId: string): Promise<void> {
 
     db.prepare(
       `UPDATE analysis_runs
-       SET status = 'completed', commit_count = ?, component_count = ?, completed_at = datetime('now')
+       SET status = 'completed', commit_count = ?, component_count = ?, truncated = ?, completed_at = datetime('now')
        WHERE id = ?`
-    ).run(mined.commits.length, rankedPaths.length, runId);
+    ).run(mined.commits.length, rankedPaths.length, mined.truncated ? 1 : 0, runId);
   } catch (err) {
     const message =
       err instanceof GitMiningError

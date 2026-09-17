@@ -16,6 +16,7 @@ export type AnalysisRunRow = {
   status: "pending" | "running" | "completed" | "failed";
   commit_count: number | null;
   component_count: number | null;
+  truncated: number;
   error: string | null;
   started_at: string;
   completed_at: string | null;
@@ -178,6 +179,33 @@ export function getAlertsForRepository(repositoryId: string, limit = 50) {
     id: string;
     component_id: string;
     component_path: string;
+    previous_score: number | null;
+    new_score: number;
+    threshold: number;
+    acknowledged: number;
+    created_at: string;
+  }[];
+}
+
+export function getAlertsForUser(userId: string, limit = 100) {
+  return db
+    .prepare(
+      `SELECT a.*, c.path as component_path, c.id as component_id,
+              r.id as repository_id, r.owner as repository_owner, r.name as repository_name
+       FROM alerts a
+       JOIN components c ON c.id = a.component_id
+       JOIN repositories r ON r.id = c.repository_id
+       WHERE r.user_id = ?
+       ORDER BY a.created_at DESC
+       LIMIT ?`
+    )
+    .all(userId, limit) as {
+    id: string;
+    component_id: string;
+    component_path: string;
+    repository_id: string;
+    repository_owner: string;
+    repository_name: string;
     previous_score: number | null;
     new_score: number;
     threshold: number;

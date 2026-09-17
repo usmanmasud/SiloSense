@@ -8,12 +8,15 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 const dbPath = path.join(dataDir, "silosense.db");
 
 declare global {
-  // eslint-disable-next-line no-var
   var __silosenseDb: DatabaseSync | undefined;
 }
 
 function createConnection() {
   const database = new DatabaseSync(dbPath);
+  // Several Next.js build workers can import this module concurrently and
+  // race to create the schema on a fresh database; wait instead of failing
+  // immediately on a locked file.
+  database.exec("PRAGMA busy_timeout = 5000;");
   database.exec("PRAGMA journal_mode = WAL;");
   database.exec("PRAGMA foreign_keys = ON;");
   return database;
@@ -84,6 +87,7 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
   status TEXT NOT NULL DEFAULT 'pending',
   commit_count INTEGER,
   component_count INTEGER,
+  truncated INTEGER NOT NULL DEFAULT 0,
   error TEXT,
   started_at TEXT NOT NULL DEFAULT (datetime('now')),
   completed_at TEXT
