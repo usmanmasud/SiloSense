@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db, newId } from "@/lib/db";
+import { query, queryOne, newId } from "@/lib/db";
 import { hashPassword, createSession, setSessionCookie } from "@/lib/auth";
 import { registerSchema } from "@/lib/validation";
 import { rateLimit, getClientIp, tooManyRequestsResponse } from "@/lib/rate-limit";
+
+const ADMIN_EMAILS = (process.env.SILOSENSE_ADMIN_EMAILS ?? "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
 
 export async function POST(req: NextRequest) {
   const ip = getClientIp(req);
@@ -21,7 +26,7 @@ export async function POST(req: NextRequest) {
 
   const { name, email, password } = parsed.data;
 
-  const existing = db.prepare(`SELECT id FROM users WHERE email = ?`).get(email);
+  const existing = await queryOne(`SELECT id FROM users WHERE email = $1`, [email]);
   if (existing) {
     return NextResponse.json(
       { error: "An account with that email already exists." },
@@ -30,11 +35,13 @@ export async function POST(req: NextRequest) {
   }
 
   const userId = newId("user");
-  db.prepare(
-    `INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)`
-  ).run(userId, email, name, hashPassword(password));
+  const isAdmin = ADMIN_EMAILS.includes(email);
+  await query(
+    `INSERT INTO users (id, email, name, password_hash, is_admin) VALUES ($1, $2, $3, $4, $5)`,
+    [userId, email, name, hashPassword(password), isAdmin]
+  );
 
-  const token = createSession(userId);
+  const token = await createSession(userId);
   await setSessionCookie(token);
 
   return NextResponse.json({ id: userId, email, name });

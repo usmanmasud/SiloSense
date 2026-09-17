@@ -5,12 +5,14 @@ import { listRepositoriesForUser } from "@/lib/queries";
 import { AddRepositoryForm } from "@/components/add-repository-form";
 import { PollRefresh } from "@/components/poll-refresh";
 import { formatRelativeTime, runStatusClasses, runStatusLabel } from "@/lib/format";
+import { getPlanLimits } from "@/lib/plans";
 
 export const metadata: Metadata = { title: "Repositories" };
 
 export default async function RepositoriesPage() {
   const user = await getCurrentUser();
-  const repositories = listRepositoriesForUser(user!.id);
+  const repositories = await listRepositoriesForUser(user!.id);
+  const limits = getPlanLimits(user!.plan);
   const anyInProgress = repositories.some(
     (r) => r.latestRun?.status === "pending" || r.latestRun?.status === "running"
   );
@@ -19,13 +21,23 @@ export default async function RepositoriesPage() {
     <div className="mx-auto max-w-5xl px-6 py-10">
       <PollRefresh active={anyInProgress} />
 
-      <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-        Repositories
-      </h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Paste a public GitHub repository URL to mine its history and compute
-        knowledge-concentration risk for every file.
-      </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+            Repositories
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Paste a public GitHub repository URL to mine its history and
+            compute knowledge-concentration risk for every file.
+          </p>
+        </div>
+        <Link
+          href="/app/account"
+          className="shrink-0 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:border-brand-primary hover:text-brand-primary"
+        >
+          {repositories.length} / {limits.maxRepositories} repositories · {limits.label} plan
+        </Link>
+      </div>
 
       <div className="mt-6 rounded-xl border border-border bg-background p-5">
         <AddRepositoryForm />

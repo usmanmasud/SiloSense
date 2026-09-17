@@ -12,12 +12,15 @@ const items = [
 export function AppSidebar({
   name,
   email,
+  isAdmin,
 }: {
   name: string;
   email: string;
+  isAdmin: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const navItems = isAdmin ? [...items, { href: "/app/admin", label: "Admin" }] : items;
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -51,7 +54,7 @@ export function AppSidebar({
         </div>
 
         <nav className="flex flex-row gap-1 overflow-x-auto px-3 pb-3 md:flex-col md:overflow-visible md:pb-0">
-          {items.map((item) => {
+          {navItems.map((item) => {
             const active =
               pathname === item.href || pathname.startsWith(item.href + "/");
             return (

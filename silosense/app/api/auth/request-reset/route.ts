@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { queryOne } from "@/lib/db";
 import { createPasswordResetToken } from "@/lib/auth";
 import { requestResetSchema } from "@/lib/validation";
 import { sendPasswordResetEmail } from "@/lib/email";
@@ -29,12 +29,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ message: GENERIC_MESSAGE });
   }
 
-  const user = db.prepare(`SELECT id FROM users WHERE email = ?`).get(email) as
-    | { id: string }
-    | undefined;
+  const user = await queryOne<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [email]);
 
   if (user) {
-    const token = createPasswordResetToken(user.id);
+    const token = await createPasswordResetToken(user.id);
     const resetUrl = `${req.nextUrl.origin}/app/reset-password?token=${token}`;
     await sendPasswordResetEmail(email, resetUrl).catch((err) => {
       console.error("Failed to send password reset email:", err);

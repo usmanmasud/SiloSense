@@ -1,94 +1,111 @@
-import { db, newId } from "./db";
+import { query, queryOne, newId, bulkValues, chunk } from "./db";
 import { mineRepository, GitMiningError } from "./git-mining";
 import { computeComponentFeatures, type ComponentEvent } from "./features";
-import {
-  computeRiskScore,
-  normalizeComplexity,
-  ALERT_THRESHOLD,
-} from "./scoring";
+import { computeRiskScore, normalizeComplexity, ALERT_THRESHOLD } from "./scoring";
 import { generateRecommendations } from "./recommendations";
 
 const MAX_COMPONENTS = 500;
+const INSERT_BATCH_SIZE = 300;
 
 // Each analysis does a git clone plus a CPU-bound scoring pass on a single
 // Node process shared by every user, so concurrent analyses are queued
 // rather than all started at once. Runs beyond this limit simply wait as
-// 'pending' rows and are picked up as a slot frees.
+// 'pending' rows and are picked up as a slot frees. This counter is a soft,
+// in-process cap on how much work this instance launches at once; the
+// SELECT ... FOR UPDATE SKIP LOCKED claim below is what actually guarantees
+// a run is never picked up twice, so the two together stay correct even if
+// this process ever runs alongside another one.
 const MAX_CONCURRENT_ANALYSES = Number(
   process.env.SILOSENSE_MAX_CONCURRENT_ANALYSES ?? 2
 );
 let runningCount = 0;
 
 /**
- * Pulls the oldest queued run and executes it, as long as there's a free
- * concurrency slot, then repeats until either the queue is empty or all
- * slots are busy. Safe to call redundantly (e.g. once per new run, once at
- * process startup) - node:sqlite's calls are synchronous, so the
- * SELECT-then-mark-running sequence below can't race with itself.
+ * Atomically claims the oldest queued run (if any) and flips it to
+ * 'running' in the same statement, then repeats until either the queue is
+ * empty or the concurrency cap is reached. FOR UPDATE SKIP LOCKED is the
+ * standard Postgres pattern for a safe multi-worker job queue - it's what
+ * makes this correct even if pumpQueue() is ever invoked concurrently
+ * (e.g. from more than one process), not just within this one.
  */
-function pumpQueue(): void {
+async function pumpQueue(): Promise<void> {
   while (runningCount < MAX_CONCURRENT_ANALYSES) {
-    const next = db
-      .prepare(
-        `SELECT id FROM analysis_runs WHERE status = 'pending' ORDER BY started_at ASC LIMIT 1`
-      )
-      .get() as { id: string } | undefined;
-    if (!next) return;
+    const claimed = await queryOne<{ id: string }>(
+      `UPDATE analysis_runs SET status = 'running'
+       WHERE id = (
+         SELECT id FROM analysis_runs
+         WHERE status = 'pending'
+         ORDER BY started_at ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1
+       )
+       RETURNING id`
+    );
+    if (!claimed) return;
 
     runningCount++;
-    void runAnalysis(next.id)
-      .catch((err) => {
-        db.prepare(
-          `UPDATE analysis_runs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?`
-        ).run(err instanceof Error ? err.message : "Unknown error", next.id);
+    void runAnalysis(claimed.id)
+      .catch(async (err) => {
+        await query(
+          `UPDATE analysis_runs SET status = 'failed', error = $1, completed_at = now() WHERE id = $2`,
+          [err instanceof Error ? err.message : "Unknown error", claimed.id]
+        );
       })
       .finally(() => {
         runningCount--;
-        pumpQueue();
+        void pumpQueue();
       });
   }
 }
 
 /**
- * Creates a pending analysis run and adds it to the in-process queue. The
- * Next.js server is a long-lived Node process (not a serverless function),
- * so queued jobs run to completion as long as the server stays up; callers
+ * Creates a pending analysis run and adds it to the queue. The Next.js
+ * server is a long-lived Node process (not a serverless function), so
+ * queued jobs run to completion as long as the server stays up; callers
  * poll the run's status via the repository API route.
  */
-export function startAnalysisRun(repositoryId: string): string {
+export async function startAnalysisRun(repositoryId: string): Promise<string> {
   const runId = newId("run");
-  db.prepare(
-    `INSERT INTO analysis_runs (id, repository_id, status) VALUES (?, ?, 'pending')`
-  ).run(runId, repositoryId);
+  await query(
+    `INSERT INTO analysis_runs (id, repository_id, status) VALUES ($1, $2, 'pending')`,
+    [runId, repositoryId]
+  );
 
-  pumpQueue();
+  void pumpQueue();
   return runId;
 }
 
 declare global {
   var __silosenseQueueResumed: boolean | undefined;
 }
-if (!globalThis.__silosenseQueueResumed) {
+// `next build` imports every route module to collect its metadata, which
+// would otherwise trigger a real (and pointless) database connection
+// attempt here on each of the build's worker processes. NEXT_PHASE is set
+// by Next.js only during that build step, never at actual runtime.
+if (
+  !globalThis.__silosenseQueueResumed &&
+  process.env.NEXT_PHASE !== "phase-production-build"
+) {
   globalThis.__silosenseQueueResumed = true;
   // Runs that were still 'pending' (never actually started mining) survive
   // a restart safely, so pick them back up once at process startup.
-  pumpQueue();
+  pumpQueue().catch((err) => {
+    console.error("Failed to resume the analysis queue on startup:", err);
+  });
 }
 
 export async function runAnalysis(runId: string): Promise<void> {
-  const run = db
-    .prepare(`SELECT * FROM analysis_runs WHERE id = ?`)
-    .get(runId) as { repository_id: string } | undefined;
+  const run = await queryOne<{ repository_id: string }>(
+    `SELECT * FROM analysis_runs WHERE id = $1`,
+    [runId]
+  );
   if (!run) return;
 
-  const repo = db
-    .prepare(`SELECT * FROM repositories WHERE id = ?`)
-    .get(run.repository_id) as { id: string; url: string } | undefined;
-  if (!repo) return;
-
-  db.prepare(`UPDATE analysis_runs SET status = 'running' WHERE id = ?`).run(
-    runId
+  const repo = await queryOne<{ id: string; url: string }>(
+    `SELECT * FROM repositories WHERE id = $1`,
+    [run.repository_id]
   );
+  if (!repo) return;
 
   try {
     const mined = await mineRepository(repo.url);
@@ -117,60 +134,50 @@ export async function runAnalysis(runId: string): Promise<void> {
       .slice(0, MAX_COMPONENTS)
       .map(([path]) => path);
 
-    // --- persist contributors -------------------------------------------
-    const contributorIdByEmail = new Map<string, string>();
-    const upsertContributor = db.prepare(
-      `INSERT INTO contributors (id, repository_id, name, email)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(repository_id, email) DO UPDATE SET name = excluded.name`
-    );
-    const getContributor = db.prepare(
-      `SELECT id FROM contributors WHERE repository_id = ? AND email = ?`
-    );
+    // --- contributors -------------------------------------------------
+    const contributorsByEmail = new Map<string, { name: string; email: string }>();
     for (const path of rankedPaths) {
       for (const ev of eventsByPath.get(path)!) {
-        if (contributorIdByEmail.has(ev.authorKey)) continue;
-        upsertContributor.run(
-          newId("contrib"),
-          repo.id,
-          ev.authorName,
-          ev.authorKey
-        );
-        const row = getContributor.get(repo.id, ev.authorKey) as {
-          id: string;
-        };
-        contributorIdByEmail.set(ev.authorKey, row.id);
+        if (!contributorsByEmail.has(ev.authorKey)) {
+          contributorsByEmail.set(ev.authorKey, { name: ev.authorName, email: ev.authorKey });
+        }
       }
     }
-
-    // --- persist components + commit events -------------------------------
-    const upsertComponent = db.prepare(
-      `INSERT INTO components (id, repository_id, path)
-       VALUES (?, ?, ?)
-       ON CONFLICT(repository_id, path) DO NOTHING`
-    );
-    const getComponent = db.prepare(
-      `SELECT id FROM components WHERE repository_id = ? AND path = ?`
-    );
-    const componentIdByPath = new Map<string, string>();
-    for (const path of rankedPaths) {
-      upsertComponent.run(newId("comp"), repo.id, path);
-      const row = getComponent.get(repo.id, path) as { id: string };
-      componentIdByPath.set(path, row.id);
+    for (const batch of chunk(Array.from(contributorsByEmail.values()), INSERT_BATCH_SIZE)) {
+      const { placeholders, values } = bulkValues(
+        batch.map((c) => [newId("contrib"), repo.id, c.name, c.email])
+      );
+      await query(
+        `INSERT INTO contributors (id, repository_id, name, email) VALUES ${placeholders}
+         ON CONFLICT (repository_id, email) DO UPDATE SET name = excluded.name`,
+        values
+      );
     }
 
-    db.prepare(`DELETE FROM commit_events WHERE repository_id = ?`).run(
-      repo.id
+    // --- components -----------------------------------------------------
+    for (const batch of chunk(rankedPaths, INSERT_BATCH_SIZE)) {
+      const { placeholders, values } = bulkValues(
+        batch.map((path) => [newId("comp"), repo.id, path])
+      );
+      await query(
+        `INSERT INTO components (id, repository_id, path) VALUES ${placeholders}
+         ON CONFLICT (repository_id, path) DO NOTHING`,
+        values
+      );
+    }
+    const componentRows = await query<{ id: string; path: string }>(
+      `SELECT id, path FROM components WHERE repository_id = $1`,
+      [repo.id]
     );
-    const insertEvent = db.prepare(
-      `INSERT INTO commit_events
-        (id, repository_id, component_id, author_name, author_email, commit_hash, commit_date, additions, deletions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
+    const componentIdByPath = new Map(componentRows.map((c) => [c.path, c.id]));
+
+    // --- commit events (replace this repo's stored history each run) ----
+    await query(`DELETE FROM commit_events WHERE repository_id = $1`, [repo.id]);
+    const eventRows: unknown[][] = [];
     for (const path of rankedPaths) {
       const componentId = componentIdByPath.get(path)!;
       for (const ev of eventsByPath.get(path)!) {
-        insertEvent.run(
+        eventRows.push([
           newId("evt"),
           repo.id,
           componentId,
@@ -179,12 +186,21 @@ export async function runAnalysis(runId: string): Promise<void> {
           "",
           ev.date,
           ev.additions,
-          ev.deletions
-        );
+          ev.deletions,
+        ]);
       }
     }
+    for (const batch of chunk(eventRows, INSERT_BATCH_SIZE)) {
+      const { placeholders, values } = bulkValues(batch);
+      await query(
+        `INSERT INTO commit_events
+          (id, repository_id, component_id, author_name, author_email, commit_hash, commit_date, additions, deletions)
+         VALUES ${placeholders}`,
+        values
+      );
+    }
 
-    // --- compute features + complexity + scores ---------------------------
+    // --- features + complexity + scores ---------------------------------
     const featuresPerPath = rankedPaths.map((path) =>
       computeComponentFeatures(eventsByPath.get(path)!, now)
     );
@@ -194,92 +210,103 @@ export async function runAnalysis(runId: string): Promise<void> {
     }));
     const complexityNorms = normalizeComplexity(complexityInputs);
 
-    const insertFeatures = db.prepare(
-      `INSERT INTO component_features (id, component_id, analysis_run_id, observation_date, feature_json)
-       VALUES (?, ?, ?, ?, ?)`
+    const previousScores = await query<{ component_id: string; score: number }>(
+      `SELECT DISTINCT ON (component_id) component_id, score
+       FROM risk_scores
+       WHERE component_id = ANY($1) AND analysis_run_id != $2
+       ORDER BY component_id, observation_date DESC`,
+      [Array.from(componentIdByPath.values()), runId]
     );
-    const insertScore = db.prepare(
-      `INSERT INTO risk_scores (id, component_id, analysis_run_id, observation_date, score, risk_level, explanation_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
-    const insertRecommendation = db.prepare(
-      `INSERT INTO recommendations (id, component_id, risk_score_id, action, priority)
-       VALUES (?, ?, ?, ?, ?)`
-    );
-    const insertAlert = db.prepare(
-      `INSERT INTO alerts (id, component_id, analysis_run_id, previous_score, new_score, threshold)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-    const previousScoreStmt = db.prepare(
-      `SELECT score FROM risk_scores
-       WHERE component_id = ? AND analysis_run_id != ?
-       ORDER BY observation_date DESC LIMIT 1`
+    const previousScoreByComponent = new Map(
+      previousScores.map((r) => [r.component_id, r.score])
     );
 
     const observationDate = now.toISOString();
+    const featureRows: unknown[][] = [];
+    const scoreRows: unknown[][] = [];
+    const recommendationRows: unknown[][] = [];
+    const alertRows: unknown[][] = [];
 
     for (let i = 0; i < rankedPaths.length; i++) {
       const path = rankedPaths[i];
       const componentId = componentIdByPath.get(path)!;
       const features = featuresPerPath[i];
       const complexityNorm = complexityNorms[i];
-      const { score, level, explanation } = computeRiskScore(
-        features,
-        complexityNorm
-      );
+      const { score, level, explanation } = computeRiskScore(features, complexityNorm);
 
-      insertFeatures.run(
+      featureRows.push([
         newId("feat"),
         componentId,
         runId,
         observationDate,
-        JSON.stringify({ ...features, sizeBytes: mined.fileSizes.get(path) ?? 0, complexityNorm })
-      );
+        JSON.stringify({
+          ...features,
+          sizeBytes: mined.fileSizes.get(path) ?? 0,
+          complexityNorm,
+        }),
+      ]);
 
       const scoreId = newId("score");
-      insertScore.run(
+      scoreRows.push([
         scoreId,
         componentId,
         runId,
         observationDate,
         score,
         level,
-        JSON.stringify(explanation)
-      );
+        JSON.stringify(explanation),
+      ]);
 
-      const recs = generateRecommendations(features, level, complexityNorm);
-      for (const rec of recs) {
-        insertRecommendation.run(
-          newId("rec"),
-          componentId,
-          scoreId,
-          rec.action,
-          rec.priority
-        );
+      for (const rec of generateRecommendations(features, level, complexityNorm)) {
+        recommendationRows.push([newId("rec"), componentId, scoreId, rec.action, rec.priority]);
       }
 
-      const prevRow = previousScoreStmt.get(componentId, runId) as
-        | { score: number }
-        | undefined;
-      const wasAboveThreshold = (prevRow?.score ?? -1) >= ALERT_THRESHOLD;
+      const previousScore = previousScoreByComponent.get(componentId) ?? null;
+      const wasAboveThreshold = (previousScore ?? -1) >= ALERT_THRESHOLD;
       const isAboveThreshold = score >= ALERT_THRESHOLD;
       if (isAboveThreshold && !wasAboveThreshold) {
-        insertAlert.run(
-          newId("alert"),
-          componentId,
-          runId,
-          prevRow?.score ?? null,
-          score,
-          ALERT_THRESHOLD
-        );
+        alertRows.push([newId("alert"), componentId, runId, previousScore, score, ALERT_THRESHOLD]);
       }
     }
 
-    db.prepare(
+    for (const batch of chunk(featureRows, INSERT_BATCH_SIZE)) {
+      const { placeholders, values } = bulkValues(batch);
+      await query(
+        `INSERT INTO component_features (id, component_id, analysis_run_id, observation_date, feature_json)
+         VALUES ${placeholders}`,
+        values
+      );
+    }
+    for (const batch of chunk(scoreRows, INSERT_BATCH_SIZE)) {
+      const { placeholders, values } = bulkValues(batch);
+      await query(
+        `INSERT INTO risk_scores (id, component_id, analysis_run_id, observation_date, score, risk_level, explanation_json)
+         VALUES ${placeholders}`,
+        values
+      );
+    }
+    for (const batch of chunk(recommendationRows, INSERT_BATCH_SIZE)) {
+      const { placeholders, values } = bulkValues(batch);
+      await query(
+        `INSERT INTO recommendations (id, component_id, risk_score_id, action, priority) VALUES ${placeholders}`,
+        values
+      );
+    }
+    for (const batch of chunk(alertRows, INSERT_BATCH_SIZE)) {
+      const { placeholders, values } = bulkValues(batch);
+      await query(
+        `INSERT INTO alerts (id, component_id, analysis_run_id, previous_score, new_score, threshold)
+         VALUES ${placeholders}`,
+        values
+      );
+    }
+
+    await query(
       `UPDATE analysis_runs
-       SET status = 'completed', commit_count = ?, component_count = ?, truncated = ?, completed_at = datetime('now')
-       WHERE id = ?`
-    ).run(mined.commits.length, rankedPaths.length, mined.truncated ? 1 : 0, runId);
+       SET status = 'completed', commit_count = $1, component_count = $2, truncated = $3, completed_at = now()
+       WHERE id = $4`,
+      [mined.commits.length, rankedPaths.length, mined.truncated, runId]
+    );
   } catch (err) {
     const message =
       err instanceof GitMiningError
@@ -287,8 +314,9 @@ export async function runAnalysis(runId: string): Promise<void> {
         : err instanceof Error
           ? err.message
           : "Unknown error during analysis.";
-    db.prepare(
-      `UPDATE analysis_runs SET status = 'failed', error = ?, completed_at = datetime('now') WHERE id = ?`
-    ).run(message, runId);
+    await query(
+      `UPDATE analysis_runs SET status = 'failed', error = $1, completed_at = now() WHERE id = $2`,
+      [message, runId]
+    );
   }
 }

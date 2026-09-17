@@ -1,31 +1,28 @@
-import { DatabaseSync } from "node:sqlite";
-import path from "node:path";
-import fs from "node:fs";
+import { Pool } from "pg";
 
-// SILOSENSE_DATA_DIR should point at a persistent volume in production
-// (e.g. Render's disk mount path) - without it, every redeploy on a host
-// with an ephemeral filesystem wipes the database.
-const dataDir = process.env.SILOSENSE_DATA_DIR
-  ? path.resolve(process.env.SILOSENSE_DATA_DIR)
-  : path.join(process.cwd(), "data");
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-
-const dbPath = path.join(dataDir, "silosense.db");
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  throw new Error(
+    "DATABASE_URL is not set. Point it at a Postgres connection string " +
+      "(a free one from https://neon.tech works well for development) - see README."
+  );
+}
 
 declare global {
-  var __silosenseDb: DatabaseSync | undefined;
+  var __silosensePool: Pool | undefined;
 }
 
-function createConnection() {
-  const database = new DatabaseSync(dbPath);
-  // Several Next.js build workers can import this module concurrently and
-  // race to create the schema on a fresh database; wait instead of failing
-  // immediately on a locked file.
-  database.exec("PRAGMA busy_timeout = 5000;");
-  database.exec("PRAGMA journal_mode = WAL;");
-  database.exec("PRAGMA foreign_keys = ON;");
-  return database;
-}
+// Reused across dev hot reloads so we don't leak connections.
+export const pool =
+  globalThis.__silosensePool ??
+  new Pool({
+    connectionString,
+    max: Number(process.env.SILOSENSE_DB_POOL_SIZE ?? 10),
+    ssl: /localhost|127\.0\.0\.1/.test(connectionString)
+      ? undefined
+      : { rejectUnauthorized: false },
+  });
+if (process.env.NODE_ENV !== "production") globalThis.__silosensePool = pool;
 
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
@@ -33,24 +30,28 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  is_admin BOOLEAN NOT NULL DEFAULT false,
+  plan TEXT NOT NULL DEFAULT 'free',
+  plan_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  suspended BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash TEXT UNIQUE NOT NULL,
-  expires_at TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS password_resets (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash TEXT UNIQUE NOT NULL,
-  expires_at TEXT NOT NULL,
-  used INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  expires_at TIMESTAMPTZ NOT NULL,
+  used BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS repositories (
@@ -60,7 +61,7 @@ CREATE TABLE IF NOT EXISTS repositories (
   name TEXT NOT NULL,
   url TEXT NOT NULL,
   default_branch TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(user_id, url)
 );
 
@@ -86,7 +87,7 @@ CREATE TABLE IF NOT EXISTS commit_events (
   author_name TEXT NOT NULL,
   author_email TEXT NOT NULL,
   commit_hash TEXT NOT NULL,
-  commit_date TEXT NOT NULL,
+  commit_date TIMESTAMPTZ NOT NULL,
   additions INTEGER NOT NULL,
   deletions INTEGER NOT NULL
 );
@@ -97,17 +98,17 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
   status TEXT NOT NULL DEFAULT 'pending',
   commit_count INTEGER,
   component_count INTEGER,
-  truncated INTEGER NOT NULL DEFAULT 0,
+  truncated BOOLEAN NOT NULL DEFAULT false,
   error TEXT,
-  started_at TEXT NOT NULL DEFAULT (datetime('now')),
-  completed_at TEXT
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS component_features (
   id TEXT PRIMARY KEY,
   component_id TEXT NOT NULL REFERENCES components(id) ON DELETE CASCADE,
   analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
-  observation_date TEXT NOT NULL,
+  observation_date TIMESTAMPTZ NOT NULL,
   feature_json TEXT NOT NULL
 );
 
@@ -115,7 +116,7 @@ CREATE TABLE IF NOT EXISTS risk_scores (
   id TEXT PRIMARY KEY,
   component_id TEXT NOT NULL REFERENCES components(id) ON DELETE CASCADE,
   analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
-  observation_date TEXT NOT NULL,
+  observation_date TIMESTAMPTZ NOT NULL,
   score REAL NOT NULL,
   risk_level TEXT NOT NULL,
   explanation_json TEXT NOT NULL
@@ -128,8 +129,8 @@ CREATE TABLE IF NOT EXISTS alerts (
   previous_score REAL,
   new_score REAL NOT NULL,
   threshold REAL NOT NULL,
-  acknowledged INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  acknowledged BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS recommendations (
@@ -138,7 +139,7 @@ CREATE TABLE IF NOT EXISTS recommendations (
   risk_score_id TEXT NOT NULL REFERENCES risk_scores(id) ON DELETE CASCADE,
   action TEXT NOT NULL,
   priority TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS ml_models (
@@ -151,7 +152,7 @@ CREATE TABLE IF NOT EXISTS ml_models (
   std_json TEXT NOT NULL,
   metrics_json TEXT NOT NULL,
   n_windows INTEGER NOT NULL,
-  trained_at TEXT NOT NULL DEFAULT (datetime('now'))
+  trained_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS ml_predictions (
@@ -161,42 +162,97 @@ CREATE TABLE IF NOT EXISTS ml_predictions (
   analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id) ON DELETE CASCADE,
   probability REAL NOT NULL,
   label INTEGER NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_components_repo ON components(repository_id);
 CREATE INDEX IF NOT EXISTS idx_events_component ON commit_events(component_id);
 CREATE INDEX IF NOT EXISTS idx_events_repo ON commit_events(repository_id);
 CREATE INDEX IF NOT EXISTS idx_runs_repo ON analysis_runs(repository_id);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON analysis_runs(status);
 CREATE INDEX IF NOT EXISTS idx_features_component ON component_features(component_id);
 CREATE INDEX IF NOT EXISTS idx_scores_component ON risk_scores(component_id);
 CREATE INDEX IF NOT EXISTS idx_scores_run ON risk_scores(analysis_run_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_component ON alerts(component_id);
 CREATE INDEX IF NOT EXISTS idx_recommendations_component ON recommendations(component_id);
+CREATE INDEX IF NOT EXISTS idx_repositories_user ON repositories(user_id);
 `;
 
-// Lazy singleton — the connection is opened on first access, not on module
-// import. This prevents Next.js build workers from opening the SQLite file
-// while collecting page configs, which caused "database is locked" errors.
-export const db = new Proxy({} as DatabaseSync, {
-  get(_target, prop) {
-    if (!globalThis.__silosenseDb) {
-      globalThis.__silosenseDb = createConnection();
-      globalThis.__silosenseDb.exec(schema);
-      globalThis.__silosenseDb
-        .prepare(
-          `UPDATE analysis_runs
-           SET status = 'failed',
-               error = 'Interrupted by a server restart. Click "Re-analyze" to try again.',
-               completed_at = datetime('now')
-           WHERE status = 'running' AND started_at < datetime('now', '-15 minutes')`
-        )
-        .run();
+let ready: Promise<void> | null = null;
+
+/** Runs the (idempotent) schema migration and startup reaping exactly once per process, lazily on first query. */
+function ensureReady(): Promise<void> {
+  if (!ready) {
+    ready = pool.query(schema).then(async () => {
+      // A run still marked "running" long after it should have finished
+      // belongs to a previous process that crashed or was redeployed
+      // mid-analysis - it can never complete itself, so surface it as
+      // failed rather than leaving it stuck forever. The time bound makes
+      // this safe to run on every startup rather than clobbering a run
+      // that's still genuinely in progress.
+      await pool.query(
+        `UPDATE analysis_runs
+         SET status = 'failed',
+             error = 'Interrupted by a server restart. Click "Re-analyze" to try again.',
+             completed_at = now()
+         WHERE status = 'running' AND started_at < now() - interval '15 minutes'`
+      );
+    });
+  }
+  return ready;
+}
+
+// pg parses TIMESTAMPTZ columns into real JS Date objects, but every date
+// field in this codebase is typed and handled as an ISO string (matching
+// the original SQLite-backed code, and avoiding re-litigating date-parsing
+// correctness in every consumer). Normalising here, once, keeps that
+// contract true everywhere without scattering `instanceof Date` checks.
+function stringifyDates<T>(row: T): T {
+  if (row && typeof row === "object") {
+    for (const [key, val] of Object.entries(row as Record<string, unknown>)) {
+      if (val instanceof Date) {
+        (row as Record<string, unknown>)[key] = val.toISOString();
+      }
     }
-    const val = (globalThis.__silosenseDb as unknown as Record<string | symbol, unknown>)[prop];
-    return typeof val === "function" ? val.bind(globalThis.__silosenseDb) : val;
-  },
-});
+  }
+  return row;
+}
+
+export async function query<T = Record<string, unknown>>(
+  text: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  await ensureReady();
+  const result = await pool.query(text, params);
+  return result.rows.map(stringifyDates) as T[];
+}
+
+export async function queryOne<T = Record<string, unknown>>(
+  text: string,
+  params: unknown[] = []
+): Promise<T | null> {
+  const rows = await query<T>(text, params);
+  return rows[0] ?? null;
+}
+
+/**
+ * Builds the "($1,$2,$3), ($4,$5,$6), ..." fragment and flat values array
+ * for a multi-row INSERT, so a batch of rows can be written in one round
+ * trip instead of one query per row.
+ */
+export function bulkValues(rows: unknown[][]): { placeholders: string; values: unknown[] } {
+  const values: unknown[] = [];
+  const placeholders = rows
+    .map((row) => `(${row.map((v) => `$${values.push(v)}`).join(",")})`)
+    .join(", ");
+  return { placeholders, values };
+}
+
+export function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
 
 export function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;

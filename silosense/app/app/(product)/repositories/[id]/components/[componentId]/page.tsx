@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { queryOne } from "@/lib/db";
 import {
   getComponentById,
   getScoreHistoryForComponent,
@@ -24,24 +24,25 @@ export default async function ComponentDetailPage({
   const { id, componentId } = await params;
   const user = await getCurrentUser();
 
-  const component = getComponentById(componentId);
+  const component = await getComponentById(componentId);
   if (!component || component.repository_id !== id) notFound();
 
-  const repository = db
-    .prepare(`SELECT id, owner, name, user_id FROM repositories WHERE id = ?`)
-    .get(component.repository_id) as
-    | { id: string; owner: string; name: string; user_id: string }
-    | undefined;
+  const repository = await queryOne<{ id: string; owner: string; name: string; user_id: string }>(
+    `SELECT id, owner, name, user_id FROM repositories WHERE id = $1`,
+    [component.repository_id]
+  );
   if (!repository || repository.user_id !== user!.id) notFound();
 
-  const history = getScoreHistoryForComponent(component.id);
+  const history = await getScoreHistoryForComponent(component.id);
   const latest = history[history.length - 1];
   if (!latest) notFound();
 
   const explanation: ScoreExplanation = JSON.parse(latest.explanation_json);
-  const recommendations = getRecommendationsForScore(latest.id);
-  const mlModel = getLatestMlModel(repository.id);
-  const prediction = mlModel ? getMlPredictionForComponent(component.id, mlModel.id) : null;
+  const mlModel = await getLatestMlModel(repository.id);
+  const [recommendations, prediction] = await Promise.all([
+    getRecommendationsForScore(latest.id),
+    mlModel ? getMlPredictionForComponent(component.id, mlModel.id) : null,
+  ]);
 
   const contributionRows = [
     { label: "Concentration", value: explanation.contributions.concentration, max: explanation.weights.concentration * 100 },

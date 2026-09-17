@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { query } from "@/lib/db";
 import {
   getRepositoryForUser,
   getLatestRun,
@@ -17,13 +17,15 @@ export async function GET(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const repository = getRepositoryForUser(user.id, id);
+  const repository = await getRepositoryForUser(user.id, id);
   if (!repository) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const latestRun = getLatestRun(repository.id);
-  const scores = latestRun?.status === "completed" ? getLatestScoresForRepository(repository.id) : [];
-  const alerts = getAlertsForRepository(repository.id, 10);
-  const mlModel = getLatestMlModel(repository.id);
+  const latestRun = await getLatestRun(repository.id);
+  const [scores, alerts, mlModel] = await Promise.all([
+    latestRun?.status === "completed" ? getLatestScoresForRepository(repository.id) : [],
+    getAlertsForRepository(repository.id, 10),
+    getLatestMlModel(repository.id),
+  ]);
 
   return NextResponse.json({
     repository,
@@ -44,9 +46,9 @@ export async function DELETE(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const repository = getRepositoryForUser(user.id, id);
+  const repository = await getRepositoryForUser(user.id, id);
   if (!repository) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  db.prepare(`DELETE FROM repositories WHERE id = ?`).run(repository.id);
+  await query(`DELETE FROM repositories WHERE id = $1`, [repository.id]);
   return NextResponse.json({ ok: true });
 }

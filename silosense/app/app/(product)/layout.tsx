@@ -12,7 +12,7 @@ export default async function ProductLayout({
 
   return (
     <div className="flex min-h-screen flex-col bg-muted md:flex-row">
-      <AppSidebar name={user.name} email={user.email} />
+      <AppSidebar name={user.name} email={user.email} isAdmin={user.isAdmin} />
       <main className="flex-1 min-w-0">{children}</main>
     </div>
   );

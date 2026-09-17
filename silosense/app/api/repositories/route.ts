@@ -1,28 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { db, newId } from "@/lib/db";
+import { query, queryOne, newId } from "@/lib/db";
 import { parseGitHubUrl } from "@/lib/repo-url";
 import { createRepositorySchema } from "@/lib/validation";
 import { startAnalysisRun } from "@/lib/analysis";
 import { listRepositoriesForUser } from "@/lib/queries";
 import { rateLimit, tooManyRequestsResponse } from "@/lib/rate-limit";
-
-const MAX_REPOSITORIES_PER_USER = Number(
-  process.env.SILOSENSE_MAX_REPOS_PER_USER ?? 15
-);
+import { getPlanLimits } from "@/lib/plans";
 
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  return NextResponse.json({ repositories: listRepositoriesForUser(user.id) });
+  return NextResponse.json({ repositories: await listRepositoriesForUser(user.id) });
 }
 
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  if (!rateLimit(`analyze:${user.id}`, 10, 60 * 60_000).allowed) {
+  const limits = getPlanLimits(user.plan);
+
+  if (!rateLimit(`analyze:${user.id}`, limits.maxAnalysesPerHour, 60 * 60_000).allowed) {
     return tooManyRequestsResponse(600);
   }
 
@@ -43,33 +42,40 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const existing = db
-    .prepare(`SELECT id FROM repositories WHERE user_id = ? AND url = ?`)
-    .get(user.id, parsedUrl.cloneUrl) as { id: string } | undefined;
+  const existing = await queryOne<{ id: string }>(
+    `SELECT id FROM repositories WHERE user_id = $1 AND url = $2`,
+    [user.id, parsedUrl.cloneUrl]
+  );
 
   let repositoryId: string;
   if (existing) {
     repositoryId = existing.id;
   } else {
-    const { count } = db
-      .prepare(`SELECT COUNT(*) as count FROM repositories WHERE user_id = ?`)
-      .get(user.id) as { count: number };
-    if (count >= MAX_REPOSITORIES_PER_USER) {
+    const countRow = await queryOne<{ count: string }>(
+      `SELECT COUNT(*) as count FROM repositories WHERE user_id = $1`,
+      [user.id]
+    );
+    if (Number(countRow?.count ?? 0) >= limits.maxRepositories) {
       return NextResponse.json(
         {
-          error: `You've reached the limit of ${MAX_REPOSITORIES_PER_USER} repositories for this beta. Remove one before adding another.`,
+          error:
+            `You've reached the ${limits.label} plan's limit of ${limits.maxRepositories} repositories. ` +
+            (limits.label === "Free"
+              ? "Remove one, or upgrade to Pro for more."
+              : "Remove one before adding another."),
         },
         { status: 400 }
       );
     }
 
     repositoryId = newId("repo");
-    db.prepare(
-      `INSERT INTO repositories (id, user_id, owner, name, url) VALUES (?, ?, ?, ?, ?)`
-    ).run(repositoryId, user.id, parsedUrl.owner, parsedUrl.name, parsedUrl.cloneUrl);
+    await query(
+      `INSERT INTO repositories (id, user_id, owner, name, url) VALUES ($1, $2, $3, $4, $5)`,
+      [repositoryId, user.id, parsedUrl.owner, parsedUrl.name, parsedUrl.cloneUrl]
+    );
   }
 
-  const runId = startAnalysisRun(repositoryId);
+  const runId = await startAnalysisRun(repositoryId);
 
   return NextResponse.json({ repositoryId, runId }, { status: 201 });
 }

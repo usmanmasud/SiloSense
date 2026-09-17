@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { token, password } = parsed.data;
-  const userId = consumePasswordResetToken(token);
+  const userId = await consumePasswordResetToken(token);
   if (!userId) {
     return NextResponse.json(
       { error: "This reset link is invalid or has expired. Request a new one." },
@@ -27,6 +27,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  setUserPassword(userId, password);
+  await setUserPassword(userId, password);
   return NextResponse.json({ ok: true });
 }

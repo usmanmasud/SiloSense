@@ -1,6 +1,7 @@
 import { scryptSync, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { cookies } from "next/headers";
-import { db, newId } from "./db";
+import { query, queryOne, newId } from "./db";
+import type { Plan } from "./plans";
 
 const SESSION_COOKIE = "silosense_session";
 const SESSION_DAYS = 30;
@@ -25,14 +26,21 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export type SessionUser = { id: string; email: string; name: string };
+export type SessionUser = {
+  id: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+  plan: Plan;
+};
 
-export function createSession(userId: string): string {
+export async function createSession(userId: string): Promise<string> {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
-  db.prepare(
-    `INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`
-  ).run(newId("sess"), userId, hashToken(token), expiresAt.toISOString());
+  await query(
+    `INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)`,
+    [newId("sess"), userId, hashToken(token), expiresAt.toISOString()]
+  );
   return token;
 }
 
@@ -57,27 +65,39 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const row = db
-    .prepare(
-      `SELECT u.id as id, u.email as email, u.name as name, s.expires_at as expires_at
-       FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token_hash = ?`
-    )
-    .get(hashToken(token)) as
-    | { id: string; email: string; name: string; expires_at: string }
-    | undefined;
+  const row = await queryOne<{
+    id: string;
+    email: string;
+    name: string;
+    is_admin: boolean;
+    plan: Plan;
+    suspended: boolean;
+    expires_at: string;
+  }>(
+    `SELECT u.id as id, u.email as email, u.name as name, u.is_admin as is_admin,
+            u.plan as plan, u.suspended as suspended, s.expires_at as expires_at
+     FROM sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.token_hash = $1`,
+    [hashToken(token)]
+  );
 
   if (!row) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) return null;
+  if (row.suspended) return null;
 
-  return { id: row.id, email: row.email, name: row.name };
+  return { id: row.id, email: row.email, name: row.name, isAdmin: row.is_admin, plan: row.plan };
+}
+
+export async function requireAdminUser(): Promise<SessionUser | null> {
+  const user = await getCurrentUser();
+  return user?.isAdmin ? user : null;
 }
 
 export async function destroyCurrentSession() {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (token) {
-    db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(hashToken(token));
+    await query(`DELETE FROM sessions WHERE token_hash = $1`, [hashToken(token)]);
   }
   await clearSessionCookie();
 }
@@ -85,37 +105,39 @@ export async function destroyCurrentSession() {
 const RESET_TOKEN_MINUTES = 30;
 
 /** Always succeeds silently for unknown emails - callers must not reveal whether an account exists. */
-export function createPasswordResetToken(userId: string): string {
+export async function createPasswordResetToken(userId: string): Promise<string> {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + RESET_TOKEN_MINUTES * 60 * 1000);
-  db.prepare(
-    `INSERT INTO password_resets (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)`
-  ).run(newId("reset"), userId, hashToken(token), expiresAt.toISOString());
+  await query(
+    `INSERT INTO password_resets (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)`,
+    [newId("reset"), userId, hashToken(token), expiresAt.toISOString()]
+  );
   return token;
 }
 
-export function consumePasswordResetToken(token: string): string | null {
-  const row = db
-    .prepare(
-      `SELECT id, user_id, expires_at, used FROM password_resets WHERE token_hash = ?`
-    )
-    .get(hashToken(token)) as
-    | { id: string; user_id: string; expires_at: string; used: number }
-    | undefined;
+export async function consumePasswordResetToken(token: string): Promise<string | null> {
+  const row = await queryOne<{
+    id: string;
+    user_id: string;
+    expires_at: string;
+    used: boolean;
+  }>(`SELECT id, user_id, expires_at, used FROM password_resets WHERE token_hash = $1`, [
+    hashToken(token),
+  ]);
 
   if (!row || row.used) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) return null;
 
-  db.prepare(`UPDATE password_resets SET used = 1 WHERE id = ?`).run(row.id);
+  await query(`UPDATE password_resets SET used = true WHERE id = $1`, [row.id]);
   return row.user_id;
 }
 
-export function setUserPassword(userId: string, password: string) {
-  db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(
+export async function setUserPassword(userId: string, password: string) {
+  await query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [
     hashPassword(password),
-    userId
-  );
+    userId,
+  ]);
   // Force re-login everywhere - a reset likely means the old credentials
   // (and any session created with them) shouldn't be trusted any more.
-  db.prepare(`DELETE FROM sessions WHERE user_id = ?`).run(userId);
+  await query(`DELETE FROM sessions WHERE user_id = $1`, [userId]);
 }

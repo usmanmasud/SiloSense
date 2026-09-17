@@ -9,7 +9,7 @@ export const metadata: Metadata = { title: "Alerts" };
 
 export default async function AlertsPage() {
   const user = await getCurrentUser();
-  const alerts = getAlertsForUser(user!.id);
+  const alerts = await getAlertsForUser(user!.id);
   const unacknowledged = alerts.filter((a) => !a.acknowledged);
 
   return (

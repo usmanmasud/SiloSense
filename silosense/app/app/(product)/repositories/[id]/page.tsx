@@ -14,6 +14,7 @@ import { PollRefresh } from "@/components/poll-refresh";
 import { ReanalyzeButton } from "@/components/reanalyze-button";
 import { TrainModelButton } from "@/components/train-model-button";
 import { AckAlertButton } from "@/components/ack-alert-button";
+import { getPlanLimits } from "@/lib/plans";
 
 export const metadata: Metadata = { title: "Repository" };
 
@@ -24,15 +25,18 @@ export default async function RepositoryDetailPage({
 }) {
   const { id } = await params;
   const user = await getCurrentUser();
-  const repository = getRepositoryForUser(user!.id, id);
+  const repository = await getRepositoryForUser(user!.id, id);
   if (!repository) notFound();
 
-  const latestRun = getLatestRun(repository.id);
+  const latestRun = await getLatestRun(repository.id);
   const inProgress = latestRun?.status === "pending" || latestRun?.status === "running";
-  const scores = latestRun?.status === "completed" ? getLatestScoresForRepository(repository.id) : [];
-  const alerts = getAlertsForRepository(repository.id, 15);
-  const mlModel = getLatestMlModel(repository.id);
+  const [scores, alerts, mlModel] = await Promise.all([
+    latestRun?.status === "completed" ? getLatestScoresForRepository(repository.id) : [],
+    getAlertsForRepository(repository.id, 15),
+    getLatestMlModel(repository.id),
+  ]);
   const mlMetrics = mlModel ? JSON.parse(mlModel.metrics_json) : null;
+  const mlEnabled = getPlanLimits(user!.plan).mlTrainingEnabled;
 
   const highRisk = scores.filter((s) => s.risk_level === "high").length;
   const avgScore = scores.length
@@ -185,7 +189,19 @@ export default async function RepositoryDetailPage({
                 Risk-prediction model
               </h2>
               <div className="mt-4 rounded-xl border border-border bg-background p-5">
-                {mlModel && mlMetrics ? (
+                {!mlEnabled ? (
+                  <div>
+                    <p className="text-sm text-muted-foreground">
+                      Training a risk-prediction model is a Pro feature.
+                    </p>
+                    <Link
+                      href="/app/account"
+                      className="mt-4 inline-block rounded-full bg-brand-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-accent-dark"
+                    >
+                      Upgrade to Pro
+                    </Link>
+                  </div>
+                ) : mlModel && mlMetrics ? (
                   <div>
                     <p className="text-xs text-muted-foreground">
                       Trained {formatRelativeTime(mlModel.trained_at)} on {mlModel.n_windows} time
