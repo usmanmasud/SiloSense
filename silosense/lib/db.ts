@@ -27,10 +27,6 @@ function createConnection() {
   return database;
 }
 
-// Reused across hot reloads in dev so we don't leak file handles.
-export const db = globalThis.__silosenseDb ?? createConnection();
-if (process.env.NODE_ENV !== "production") globalThis.__silosenseDb = db;
-
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -179,24 +175,28 @@ CREATE INDEX IF NOT EXISTS idx_alerts_component ON alerts(component_id);
 CREATE INDEX IF NOT EXISTS idx_recommendations_component ON recommendations(component_id);
 `;
 
-db.exec(schema);
-
-// A run still marked "running" long after it should have finished belongs
-// to a previous process that crashed or was redeployed mid-analysis - it
-// can never complete itself, so surface it as failed rather than leaving
-// it stuck forever. The time bound (comfortably longer than the mining
-// timeouts in lib/git-mining.ts) is what makes this safe to run on every
-// module load rather than relying on a fragile "only once per process"
-// guard - Next.js's dev server can re-evaluate this module more than once
-// per process, and a naive unconditional sweep would otherwise be able to
-// race with, and clobber, a run that's still genuinely in progress.
-db.prepare(
-  `UPDATE analysis_runs
-   SET status = 'failed',
-       error = 'Interrupted by a server restart. Click "Re-analyze" to try again.',
-       completed_at = datetime('now')
-   WHERE status = 'running' AND started_at < datetime('now', '-15 minutes')`
-).run();
+// Lazy singleton — the connection is opened on first access, not on module
+// import. This prevents Next.js build workers from opening the SQLite file
+// while collecting page configs, which caused "database is locked" errors.
+export const db = new Proxy({} as DatabaseSync, {
+  get(_target, prop) {
+    if (!globalThis.__silosenseDb) {
+      globalThis.__silosenseDb = createConnection();
+      globalThis.__silosenseDb.exec(schema);
+      globalThis.__silosenseDb
+        .prepare(
+          `UPDATE analysis_runs
+           SET status = 'failed',
+               error = 'Interrupted by a server restart. Click "Re-analyze" to try again.',
+               completed_at = datetime('now')
+           WHERE status = 'running' AND started_at < datetime('now', '-15 minutes')`
+        )
+        .run();
+    }
+    const val = (globalThis.__silosenseDb as unknown as Record<string | symbol, unknown>)[prop];
+    return typeof val === "function" ? val.bind(globalThis.__silosenseDb) : val;
+  },
+});
 
 export function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
