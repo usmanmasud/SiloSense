@@ -4,6 +4,7 @@ export type ComponentEvent = {
   authorName: string;
   additions: number;
   deletions: number;
+  commitHash?: string;
 };
 
 export type ContributorShare = {

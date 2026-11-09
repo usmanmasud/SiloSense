@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import {
   getRepositoryForUser,
   getLatestRun,
+  getLatestCompletedRun,
   getLatestScoresForRepository,
   getAlertsForRepository,
   getLatestMlModel,
@@ -21,8 +22,10 @@ export async function GET(
   if (!repository) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const latestRun = await getLatestRun(repository.id);
+  const shownRun =
+    latestRun?.status === "completed" ? latestRun : await getLatestCompletedRun(repository.id);
   const [scores, alerts, mlModel] = await Promise.all([
-    latestRun?.status === "completed" ? getLatestScoresForRepository(repository.id) : [],
+    shownRun ? getLatestScoresForRepository(repository.id) : [],
     getAlertsForRepository(repository.id, 10),
     getLatestMlModel(repository.id),
   ]);
@@ -30,6 +33,7 @@ export async function GET(
   return NextResponse.json({
     repository,
     latestRun,
+    resultsRun: shownRun,
     scores,
     alerts,
     mlModel: mlModel

@@ -22,6 +22,23 @@ export type AnalysisRunRow = {
   completed_at: string | null;
 };
 
+// Only files scored by the most recent completed run are current. A file
+// deleted from the repository (or no longer among the 500 most active)
+// keeps its older scores as history, but is not shown as a current result.
+const LATEST_COMPLETED_RUN_SQL = `SELECT id FROM analysis_runs
+  WHERE repository_id = $1 AND status = 'completed'
+  ORDER BY started_at DESC LIMIT 1`;
+
+export async function getLatestCompletedRun(
+  repositoryId: string
+): Promise<AnalysisRunRow | null> {
+  return queryOne<AnalysisRunRow>(
+    `SELECT * FROM analysis_runs WHERE repository_id = $1 AND status = 'completed'
+     ORDER BY started_at DESC LIMIT 1`,
+    [repositoryId]
+  );
+}
+
 export async function getRepositoryForUser(
   userId: string,
   repositoryId: string
@@ -75,6 +92,7 @@ export async function listRepositoriesForUser(userId: string): Promise<Repositor
              FROM risk_scores rs
              JOIN components c ON c.id = rs.component_id
              WHERE c.repository_id = $1
+               AND rs.analysis_run_id = (${LATEST_COMPLETED_RUN_SQL})
            )
            SELECT
              COUNT(*) AS componentCount,
@@ -118,6 +136,7 @@ export async function getLatestScoresForRepository(
        FROM risk_scores rs
        JOIN components c ON c.id = rs.component_id
        WHERE c.repository_id = $1
+         AND rs.analysis_run_id = (${LATEST_COMPLETED_RUN_SQL})
      )
      SELECT l.id as risk_score_id, l.component_id, c.path as component_path,
             l.score, l.risk_level, l.observation_date, l.explanation_json, l.analysis_run_id

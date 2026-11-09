@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import {
   getRepositoryForUser,
   getLatestRun,
+  getLatestCompletedRun,
   getLatestScoresForRepository,
   getAlertsForRepository,
   getLatestMlModel,
@@ -30,8 +31,12 @@ export default async function RepositoryDetailPage({
 
   const latestRun = await getLatestRun(repository.id);
   const inProgress = latestRun?.status === "pending" || latestRun?.status === "running";
+  // While a new run is in progress, or if it failed, keep showing the
+  // results of the most recent successful analysis.
+  const shownRun =
+    latestRun?.status === "completed" ? latestRun : await getLatestCompletedRun(repository.id);
   const [scores, alerts, mlModel] = await Promise.all([
-    latestRun?.status === "completed" ? getLatestScoresForRepository(repository.id) : [],
+    shownRun ? getLatestScoresForRepository(repository.id) : [],
     getAlertsForRepository(repository.id, 15),
     getLatestMlModel(repository.id),
   ]);
@@ -85,19 +90,24 @@ export default async function RepositoryDetailPage({
         <div className="mt-8 rounded-xl border border-red-200 bg-red-50 p-6">
           <p className="text-sm font-medium text-red-800">Analysis failed</p>
           <p className="mt-1 text-sm text-red-700">{latestRun.error}</p>
+          {shownRun && (
+            <p className="mt-2 text-sm text-red-700">
+              The results below are from the last successful analysis.
+            </p>
+          )}
         </div>
       )}
 
-      {latestRun?.status === "completed" && (
+      {shownRun && (
         <>
           <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Stat label="Commits analyzed" value={latestRun.commit_count ?? 0} />
-            <Stat label="Files scored" value={latestRun.component_count ?? 0} />
+            <Stat label="Commits analyzed" value={shownRun.commit_count ?? 0} />
+            <Stat label="Files scored" value={shownRun.component_count ?? 0} />
             <Stat label="High risk" value={highRisk} accent />
             <Stat label="Average score" value={avgScore ?? "—"} />
           </div>
 
-          {!!latestRun.truncated && (
+          {!!shownRun.truncated && (
             <p className="mt-3 text-xs text-muted-foreground">
               This repository has more history than the analysis window
               covers — results are based on the most recent commits and most

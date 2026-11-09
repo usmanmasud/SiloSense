@@ -124,6 +124,7 @@ export async function runAnalysis(runId: string): Promise<void> {
           authorName: commit.authorName,
           additions: file.additions,
           deletions: file.deletions,
+          commitHash: commit.hash,
         });
         eventsByPath.set(file.path, list);
       }
@@ -183,7 +184,7 @@ export async function runAnalysis(runId: string): Promise<void> {
           componentId,
           ev.authorName,
           ev.authorKey,
-          "",
+          ev.commitHash ?? "",
           ev.date,
           ev.additions,
           ev.deletions,
