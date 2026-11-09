@@ -11,12 +11,12 @@ const steps = [
   {
     title: "Connect a repository",
     body:
-      "A team points SiloSense at a Git-based repository, authenticating with the GitHub or GitLab API so history and metadata can be read.",
+      "A user pastes the URL of a public GitHub repository. The analysis runs in the background, so the user can keep working while it completes.",
   },
   {
-    title: "Mine commit, blame & review history",
+    title: "Mine the commit history",
     body:
-      "SiloSense walks the commit log, blame data, and pull-request/review activity to build a per-file record of who has worked on what, and when.",
+      "SiloSense clones the repository and reads its latest commits to build a per-file record of who has worked on what, when, and how many lines they changed.",
   },
   {
     title: "Compute the risk score",
@@ -31,7 +31,7 @@ const steps = [
   {
     title: "Track history & raise alerts",
     body:
-      "Scores are stored over time, so trends are visible. If a component crosses a configured risk threshold, the team is alerted.",
+      "Scores are stored over time, so trends are visible. If a component's score crosses 70, an alert appears on the alerts page.",
   },
   {
     title: "Recommend pairing",

@@ -7,9 +7,10 @@ export const metadata: Metadata = {
 };
 
 const details = [
-  { label: "Email", value: "hello@silosense.app" },
-  { label: "GitHub", value: "github.com/silosense" },
-  { label: "Status", value: "Final year project — in development" },
+  { label: "Developer", value: "Usman Masud Aliyu" },
+  { label: "Institution", value: "Department of Software Engineering, Bayero University Kano" },
+  { label: "GitHub", value: "github.com/usmanmasud/SiloSense" },
+  { label: "Status", value: "Final year project, 2026" },
 ];
 
 export default function ContactPage() {

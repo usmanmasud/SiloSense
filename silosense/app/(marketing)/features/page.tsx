@@ -12,11 +12,11 @@ const features = [
     number: "01",
     title: "Repository mining",
     body:
-      "SiloSense connects to Git-based repositories and pulls commit history, blame data, and pull-request/review metadata using the Git and GitHub/GitLab APIs. This forms the raw evidence behind every risk score.",
+      "SiloSense clones a public GitHub repository with the Git command-line tool and reads up to its latest 2,000 commits: who changed each file, when, and how many lines were added and deleted. This forms the raw evidence behind every risk score.",
     points: [
       "Commit authorship and timestamps",
-      "Line-level blame per file",
-      "Pull-request and review participation",
+      "Lines added and deleted per file",
+      "File sizes at the latest commit",
     ],
   },
   {
@@ -45,18 +45,18 @@ const features = [
     number: "04",
     title: "History and threshold alerts",
     body:
-      "Risk scores are recorded over time so a team can see whether a component's risk is rising or falling. When a score crosses a configured threshold, SiloSense raises an alert.",
+      "Risk scores are recorded over time so a team can see whether a component's risk is rising or falling. When a score crosses the threshold of 70, SiloSense raises an alert.",
     points: [
       "Historical score timeline per component",
-      "Configurable risk thresholds",
-      "Alerts for components crossing threshold",
+      "Alert threshold of 70",
+      "Alerts only when a file crosses the threshold",
     ],
   },
   {
     number: "05",
     title: "Pairing recommendations",
     body:
-      "For components flagged as high risk, SiloSense suggests which developers could be paired together — typically the sole owner and a developer with related but distant experience — to spread working knowledge.",
+      "For components at medium risk or above, SiloSense suggests which developers could be paired together — typically the main contributor and the second contributor — or recommends documentation, to spread working knowledge.",
     points: [
       "Owner / secondary-contributor matching",
       "Prioritised by risk severity",
@@ -67,10 +67,10 @@ const features = [
     number: "06",
     title: "Machine-learning refinement",
     body:
-      "As an extension of the baseline formula, a lightweight supervised model is investigated to test whether repository-derived features can better predict knowledge-concentration risk than the rule-based score alone.",
+      "As an extension of the rule-based score, a logistic-regression model is trained on a repository's own history to predict which files will be high-risk at the next checkpoint, and is compared with a simple baseline.",
     points: [
       "Trained on repository-derived features",
-      "Evaluated against the baseline score",
+      "Evaluated against a baseline rule",
       "Optional layer, not a replacement",
     ],
   },
@@ -85,12 +85,11 @@ export default function FeaturesPage() {
             Features
           </span>
           <h1 className="mt-3 max-w-2xl text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-            Six objectives, working together as one system
+            Six features, working together as one system
           </h1>
           <p className="mt-4 max-w-2xl text-muted-foreground">
-            Every feature below maps directly to an objective of the
-            project — from mining raw Git data to producing a
-            recommendation a team can act on.
+            Every feature below is part of one workflow — from mining raw
+            Git data to producing a recommendation a team can act on.
           </p>
         </div>
       </section>

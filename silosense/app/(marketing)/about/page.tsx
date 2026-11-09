@@ -7,29 +7,27 @@ export const metadata: Metadata = {
 };
 
 const objectives = [
-  "Mine commit, blame, and pull-request/review metadata from Git-based repositories using Git and GitHub/GitLab APIs.",
-  "Develop a reproducible component-level knowledge-concentration risk score on a 0–100 scale using contributor distribution, recency, and complexity-related information.",
-  "Develop an interactive repository visualisation that presents component risk and allows users to examine the developers and factors behind each result.",
-  "Track risk scores over time and provide alerts when a component crosses a defined risk threshold.",
-  "Generate pairing and knowledge-sharing recommendations that can help reduce excessive dependence on individual contributors.",
-  "Evaluate the system using selected open-source repositories, comparing detected risks with repository history, known contributor changes, and developer assessment.",
+  "To analyse existing knowledge-concentration and Truck Factor approaches, together with the commit history data available from public GitHub repositories, in order to identify their limitations and the requirements of the proposed system.",
+  "To design the architecture, database, user interface, and component-level knowledge-concentration risk-scoring model (on a 0–100 scale) of the proposed system.",
+  "To implement and test SiloSense, including repository mining, risk scoring, an interactive repository heatmap, historical tracking with threshold alerts, and pairing recommendations, and to evaluate it on selected open-source repositories.",
 ];
 
 const inScope = [
-  "Git repositories and available GitHub/GitLab commit, blame, pull-request, and review metadata.",
+  "Public GitHub repositories and their commit history: the files changed in each commit, the lines added and deleted, and the size of each file.",
   "Repository-level and component-level analysis of contribution distribution, recency, and complexity.",
   "A defined 0–100 risk score with historical records for observing change over time.",
   "An interactive repository heatmap with drill-down detail on risk and contributors.",
-  "Threshold-based alerts for components exceeding a configured risk level.",
+  "Threshold-based alerts for components whose score reaches 70.",
   "Pairing and knowledge-sharing recommendations.",
   "Investigation of a lightweight supervised model as a refinement of the baseline score.",
-  "Evaluation on roughly 5–10 real open-source repositories.",
+  "Evaluation on five real open-source repositories, together with usability testing with intended users.",
 ];
 
 const outOfScope = [
   "Replacing general software-quality analysis platforms.",
   "Informing employment decisions about individual developers.",
-  "Reproducing the full functionality of GitHub or GitLab.",
+  "Reproducing the full functionality of GitHub.",
+  "Private repositories, repositories on other platforms, and blame, pull-request, or code-review data.",
 ];
 
 export default function AboutPage() {

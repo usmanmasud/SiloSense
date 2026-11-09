@@ -18,14 +18,14 @@ const problems = [
     stat: "100%",
     label: "repository-derived",
     body:
-      "evidence is already sitting in your Git history: commits, blame data, and review activity.",
+      "evidence is already sitting in your Git history: who changed each file, when, and by how many lines.",
   },
 ];
 
 const features = [
   {
     title: "Repository mining",
-    body: "Pulls commit, blame, and pull-request/review metadata from Git-based repositories via the GitHub/GitLab APIs.",
+    body: "Clones a public GitHub repository and reads its commit history: who changed each file, when, and how many lines.",
   },
   {
     title: "0–100 risk score",
@@ -37,7 +37,7 @@ const features = [
   },
   {
     title: "History & alerts",
-    body: "Tracks how risk moves over time and notifies the team when a component crosses a defined threshold.",
+    body: "Keeps every score over time and raises an alert when a file's score crosses the threshold of 70.",
   },
   {
     title: "Pairing recommendations",
@@ -45,7 +45,7 @@ const features = [
   },
   {
     title: "ML-assisted scoring",
-    body: "An optional lightweight model investigated as a refinement of the baseline scoring formula.",
+    body: "An optional logistic-regression model that predicts which files will be high-risk next, compared with a simple baseline.",
   },
 ];
 
@@ -125,8 +125,8 @@ export default function Home() {
               What SiloSense does
             </h2>
             <p className="mt-3 text-muted-foreground">
-              Six objectives, one workflow — from raw commit data to a
-              recommendation your team can act on.
+              One workflow — from raw commit data to a recommendation your
+              team can act on.
             </p>
           </div>
           <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">

@@ -11,27 +11,27 @@ const signals = [
     key: "C",
     name: "Contributor concentration",
     body:
-      "How unevenly a component's changes are distributed across its contributors. A file touched almost entirely by one developer scores higher than one with balanced contribution.",
+      "The largest share of a file's changed lines that belongs to one developer. A file changed almost entirely by one developer scores higher than one with balanced contribution.",
   },
   {
     key: "R",
     name: "Recency",
     body:
-      "How recently the component's primary contributors were active. Knowledge tied to contributors who have gone quiet is treated as more fragile.",
+      "The same share, but with older changes counting less: a change made 120 days ago counts half as much as one made today. It shows who holds the recent knowledge of a file.",
   },
   {
     key: "X",
     name: "Complexity",
     body:
-      "A complexity-related weighting (e.g. size, churn, or structural complexity) that reflects how costly a component would be to re-learn from scratch.",
+      "Estimated from the file's size and its total lines changed, scaled from 0 to 1 against the other files in the repository. It reflects how costly a file would be to re-learn.",
   },
 ];
 
 const evalSteps = [
-  "Select approximately 5–10 open-source repositories with accessible history.",
+  "Select five open-source repositories with accessible history.",
   "Run SiloSense against each repository to generate component-level risk scores.",
-  "Compare flagged components against known contributor departures or inactivity in the repository history.",
-  "Collect developer feedback on whether flagged components match their own sense of risk.",
+  "Compare the spread of risk levels and the analysis time across the repositories.",
+  "Compare the optional prediction model with a simple baseline, and test the system with intended users.",
 ];
 
 export default function MethodologyPage() {
@@ -85,12 +85,12 @@ export default function MethodologyPage() {
             Baseline formula
           </span>
           <p className="mt-3 overflow-x-auto whitespace-nowrap font-mono text-sm text-white">
-            Risk(component) = 100 × (w₁·C + w₂·R + w₃·X)
+            Risk(component) = 100 × (0.45·C + 0.35·R + 0.20·X)
           </p>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-white/70">
-            where C, R, and X are normalised to [0, 1] and w₁ + w₂ + w₃ = 1.
-            Weights are tuned during evaluation rather than fixed in
-            advance, so the formula can be recalibrated per project.
+            where C, R, and X are each between 0 and 1. Scores of 80 or
+            more are high, 60–79 elevated, 40–59 medium, and below 40 low.
+            An alert is raised when a file&apos;s score crosses 70.
           </p>
         </div>
 
@@ -99,9 +99,8 @@ export default function MethodologyPage() {
             Evaluation approach
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            The system is evaluated against real repository history rather
-            than synthetic data, so flagged risk can be checked against what
-            actually happened.
+            The system is evaluated on the real history of public
+            open-source repositories rather than on synthetic data.
           </p>
           <ol className="mt-6 flex flex-col gap-4">
             {evalSteps.map((step, i) => (
